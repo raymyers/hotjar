@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+#set -x
+#set -e
+
+FIRST_APP_PORT=8090
+LAST_APP_PORT=8099
+SERVICE_PORT=8080
+
+JOB="hotjar-instance"
+CHAIN_BASE="hot-deploy"
+CHAIN="$CHAIN_BASE$SERVICE_PORT"
+
+print_usage() {
+  echo "Usage: hotjar start-next APP"
+  echo "       hotjar deploy APP"
+  echo "       hotjar undeploy APP"
+  echo "       hotjar stop-all APP"
+  echo "       hotjar stop-all-except APP PORT_TO_KEEP"
+}
+
+list_rules() {
+  sudo iptables --list-rules $CHAIN -t nat
+  return $?
+}
+
+chain_present() {
+  list_rules > /dev/null 2>&1
+  return $?
+}
+
+ensure_rules() {
+  if ! chain_present; then
+    echo "No iptables chain $CHAIN. Setting up.."
+    sudo iptables -t nat -N $CHAIN
+    sudo iptables -t nat -A PREROUTING -j $CHAIN || die "Could not set up iptables chain"
+  fi
+  if [ $(list_rules | wc -l) -lt 2 ]; then
+    #echo "Adding dummy rule in chain $CHAIN"
+    sudo iptables -t nat -A $CHAIN -p tcp --dport $SERVICE_PORT -j ACCEPT -s 127.0.0.1 || die "Could not add dummy rule"
+  fi  
+}
+
+start_next_cmd() {
+  if [ $# -lt 2 ]; then print_usage; RETVAL=1; return; fi
+  APP=$2
+  start_next
+  RETVAL=$?
+}
+
+start_next() {
+  find_free_port
+  if [ $PORT -eq 0 ]; then RETVAL=1; return; fi
+  echo "choosing port $PORT"
+  sudo initctl start $JOB app="$APP" port="$PORT"
+  return $?
+}
+
+deploy_cmd() {
+  if [ $# -lt 2 ]; then print_usage; RETVAL=1; return; fi
+  APP=$2
+  deploy
+  RETVAL=$?
+}
+
+deploy() {
+  find_running_ports
+  start_next || die "Could not start"
+  verify || die "New deploy failed verification"
+  ensure_rules
+  switch_new_traffic || die "Could not switch new traffic"
+  drain_old_traffic || die "Could not drain old traffic"
+  PORT_TO_KEEP="$PORT"
+  stop_all_except || die "Could not stop old instances"
+}
+
+undeploy_cmd() {
+  if [ $# -lt 2 ]; then print_usage; RETVAL=1; return; fi
+  APP=$2
+  undeploy
+  RETVAL=$?
+}
+
+undeploy() {
+  echo "Stopping all instances"
+  find_running_ports || die "Could not determine which ports were running"
+  PORT_TO_KEEP=0
+  stop_all_except || die "Could not stop old instances"
+  
+  echo "Removing iptables config"
+  if chain_present; then
+    sudo iptables -t nat --flush $CHAIN
+    sudo iptables -t nat --check PREROUTING -j $CHAIN && sudo iptables -t nat --delete PREROUTING -j $CHAIN
+    sudo iptables -t nat --delete-chain $CHAIN || die "Could not delete chain"
+  fi
+  echo "Successfully undeployed $APP"
+}
+
+verify() {
+  local max_tries=10
+  local time_to_wait=1
+  local test_url="http://localhost:$PORT/admin/healthcheck"
+  echo "Waiting for healthcheck on $PORT"
+  for (( tries=1; tries<=$max_tries; tries++ )); do
+    local httpcode=$(curl --write-out %{http_code} --silent --output /dev/null "$test_url")
+    if [ $httpcode -eq 200 ]; then
+      echo "Healthcheck passed"
+      return
+    fi
+    echo "Got $httpcode response from test url remaining. Try $tries/$max_tries."
+    sleep $time_to_wait
+  done
+  return 1
+}
+
+switch_new_traffic() {
+  echo "Switching port $SERVICE_PORT traffic to $PORT"
+  sudo iptables -t nat --replace $CHAIN 1 -p tcp --dport $SERVICE_PORT -j REDIRECT --to-ports $PORT
+# && sudo iptables -t nat --delete $CHAIN 2 -p
+  return $?
+}
+
+drain_old_traffic() {
+  (IFS=$'\n'
+    for p in $RUNNING_PORTS; do
+      drain_port $p
+    done
+  )
+}
+
+drain_port() {
+  local port=$1
+  local max_tries=10
+  local time_to_wait=1
+  echo "Waiting for traffic on port $port to stop..."
+  for (( tries=1; tries<=$max_tries; tries++ )); do
+    local connections=$(netstat -ant | grep ":$port.*:.*ESTABLISHED" | wc -l)
+    echo "  $connections connections remaining. Try $tries/$max_tries."
+    if [ $connections -eq 0 ]; then
+      break
+    fi
+    sleep $time_to_wait
+  done
+}
+
+find_free_port() {
+  for port in $(seq ${FIRST_APP_PORT} ${LAST_APP_PORT}); do
+    if sudo initctl status $JOB app="$APP" port=$port > /dev/null 2>&1
+    then
+      echo "Already running on $port"
+      continue
+    fi
+    if netstat -atwn | grep ":${port}.*:\*\s*LISTEN\s*$"
+    then echo "Port $port in use by something else"
+    else
+      PORT="$port"
+      return
+    fi
+  done
+  echo "No free ports found between $FIRST_APP_PORT and $LAST_APP_PORT"
+  return -1
+}
+
+find_running_ports() {
+  RUNNING_PORTS=$(sudo initctl list | perl -nse '/^hotjar-instance .\Q$app\E,(\d+)/ && print $1 . "\n"' -- -app="$APP")
+  return $?
+}
+
+stop_all_cmd() {
+  if [ $# -lt 2 ]; then print_usage; RETVAL=1; return; fi
+  APP=$2
+  PORT_TO_KEEP=0
+  stop_all_except
+  RETVAL=$?
+}
+
+stop_all_except_cmd() {
+  if [ $# -lt 3 ]; then print_usage; RETVAL=1; return; fi
+  APP=$2
+  PORT_TO_KEEP=$3
+  stop_all_except
+  RETVAL=$?
+}
+
+stop_all_except() {
+  (IFS=$'\n'
+  for port in $RUNNING_PORTS; do
+    if [ $port -ne $PORT_TO_KEEP ]; then
+      echo "Stopping port $port"
+      sudo initctl stop $JOB app=$APP port=${port}
+    fi
+ done)
+}
+
+die() { 
+  echo "Error: $@" 1>&2 
+  exit 1
+}
+
+COMMAND=$1
+RETVAL=0
+case "$COMMAND" in
+
+deploy) 
+  deploy_cmd "$@"
+;;
+undeploy) 
+  undeploy_cmd "$@"
+;;
+start-next) 
+  start_next_cmd "$@"
+;;
+stop-all)
+;;
+stop-all-except)
+  stop_all_except_cmd "$@"
+;;
+*)
+  print_usage
+  exit 1
+;;
+esac
+exit $RETVAL
+

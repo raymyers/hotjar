@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#set +x
+if [ $# -ne 2 ]
+then
+echo "usage: start-app APP PORT"
+exit 1
+fi
+
+APP=$1
+PORT=$2
+ADMIN_PORT=$PORT      
+LOG_FILE="/var/log/hotjar/hotjar-$APP.log"
+
+echo "Starting app $APP on port $PORT"
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+APP_HOME=$DIR/../apps/$APP
+export JAVA_OPTS="$JAVA_OPTS -Ddw.http.port=$PORT -Ddw.http.adminPort=$ADMIN_PORT"
+exec "$APP_HOME/bin/$APP" server "$APP_HOME/config/hello-world.yml" >> $LOG_FILE 2>&1

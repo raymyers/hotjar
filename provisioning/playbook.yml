@@ -1,0 +1,13 @@
+---
+- hosts: vagrant
+
+  #user: root
+
+  # Vagrant setup
+  user: vagrant
+  sudo: true
+
+  roles:
+    - common
+    - deploy-user
+    - hotjar-jobs

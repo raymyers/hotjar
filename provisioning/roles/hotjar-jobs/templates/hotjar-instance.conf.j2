@@ -1,0 +1,14 @@
+description "Hot Jar Instance"
+
+instance "$app,$port"
+
+start on (local-filesystems and net-device-up IFACE=eth0) 
+stop  on shutdown
+
+respawn
+
+script
+    set -x
+    cmd="{{ hotjar_home }}/bin/start-app $app $port"
+    exec su {{ hotjar_user }} -m -c "exec $cmd"
+end script

@@ -1,0 +1,11 @@
+---
+- name: Update APT cache
+  apt: update_cache=yes
+
+- name: Install packages
+  apt: pkg={{ item }}
+  with_items:
+    - vim
+    - curl
+    - openjdk-7-jdk
+# Note openjdk-7-jdk depends on X and there's no headless package.

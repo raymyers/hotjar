@@ -1,0 +1,4 @@
+---
+hotjar_user: deploy
+hotjar_home: /usr/share/hotjar
+app_name: hello-world

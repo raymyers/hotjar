@@ -1,0 +1,22 @@
+description "Hot Jar"
+
+console output
+
+start on runlevel [2345]
+
+pre-start script
+    for app in "{{ app_name }}"
+    do
+      logFile="/var/log/hotjar/hotjar-$app-deploy.log"
+      su {{ hotjar_user }} -m -c "{{ hotjar_home }}/bin/hotjar deploy $app" >> $logFile 2>&1
+    done
+end script
+
+post-stop script
+    serviceUser=ray
+    for app in "{{ app_name }}"
+    do
+      logFile="/var/log/hotjar/hotjar-$app-undeploy.log"
+      su $serviceUser -m -c "{{ hotjar_home }}/bin/hotjar undeploy $app" >> $logFile 2>&1
+    done
+end script

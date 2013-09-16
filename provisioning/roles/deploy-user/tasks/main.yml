@@ -1,0 +1,14 @@
+---
+- name: Add the deploy user
+# from python2.7 -c 'from passlib.hash import sha256_crypt; print sha256_crypt.encrypt("deploy")'
+  user: name=deploy
+        home=/home/deploy
+        shell=/bin/bash
+        password="$5$rounds=80000$D.0AGmBELtViR9fi$s8Hma6E/i06oXPTSQr0x9kKxy.vgresv5NK/mxWKx.6"
+        comment="Deploy User"
+
+- name: Enable sudo access for the deploy user
+  copy: src=deploy_conf dest=/etc/sudoers.d/deploy_conf owner=root group=root mode=0440 validate='visudo -cf %s'
+#  user: name=deploy
+#        groups=sudo
+#        append=yes

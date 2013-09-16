@@ -1,0 +1,5 @@
+Cmnd_Alias IPTABLES = /sbin/iptables
+Cmnd_Alias NETSTAT = /bin/netstat
+Cmnd_Alias JOBS = /sbin/initctl,/sbin/start,/sbin/stop
+
+deploy ALL=(ALL) NOPASSWD:IPTABLES,NETSTAT,JOBS
